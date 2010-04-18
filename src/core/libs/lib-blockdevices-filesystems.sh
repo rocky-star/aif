@@ -21,9 +21,10 @@
 
 # -- ADDITIONAL INTERNAL FORMATS --
 # $TMP_FILESYSTEMS: each filesystem on a separate line, so block devices can appear multiple times be on multiple lines (eg LVM volumegroups with more lvm LV's)
-# part part_type part_label fs_type fs_create fs_mountpoint fs_mount fs_opts fs_label fs_params
-
-
+# part;part_type;part_label;fs_type;fs_create;fs_mountpoint;fs_mount;fs_opts;fs_label;fs_params
+# in practice some fields (like fs_opts or fs_params) can contain spaces, so when working with this we need to escape the "data whitespace" so read can separate different variables correctly
+# TODO do the above: sed -e 's/ /\\\ /g' -e 's/;/ /g'
+# TODO also do similar for TMP_BLOCKDEVICE
 
 modprobe -q dm-crypt || show_warning modprobe 'Could not modprobe dm-crypt. no support for disk encryption'
 modprobe -q aes-i586 || modprobe -q aes-x86-64 || show_warning modprobe 'Could not modprobe aes-i586 or aes-x86-64. no support for disk encryption'
@@ -433,7 +434,7 @@ generate_filesystem_list ()
 			for fs in `sed 's/|/ /g' <<< $fs_string` # this splits multiple fs'es up, or just takes the one if there is only one (lvm vg's can have more then one lv)
 			do
 				parse_filesystem_string "$fs"
-				echo "$part $part_type $part_label $fs_type $fs_create $fs_mountpoint $fs_mount $fs_opts $fs_label $fs_params" >> $TMP_FILESYSTEMS
+				echo "$part;$part_type;$part_label;$fs_type;$fs_create;$fs_mountpoint;$fs_mount;$fs_opts;$fs_label;$fs_params" >> $TMP_FILESYSTEMS
 			done
 		fi
 	done < $TMP_BLOCKDEVICES
@@ -471,24 +472,24 @@ process_filesystems ()
 					then
 						debug 'FS' "$fs_id ->Still need to do it: Making the filesystem on a vg volume"
 						inform "Making $fs_type filesystem on $part" disks
-						process_filesystem $part $fs_type $fs_create $fs_mountpoint no_mount $fs_opts $fs_label $fs_params && done_filesystems+=("$fs_id") || returncode=1
+						process_filesystem $part $fs_type $fs_create $fs_mountpoint no_mount "$fs_opts" $fs_label "$fs_params" && done_filesystems+=("$fs_id") || returncode=1
 					elif [ "$part_type" != lvm-pv -a -b "$part" ] # $part is not a lvm PV and it exists
 					then
 						debug 'FS' "$fs_id ->Still need to do it: Making the filesystem on a non-pv volume"
 						inform "Making $fs_type filesystem on $part" disks
-						process_filesystem $part $fs_type $fs_create $fs_mountpoint no_mount $fs_opts $fs_label $fs_params && done_filesystems+=("$fs_id") || returncode=1
+						process_filesystem $part $fs_type $fs_create $fs_mountpoint no_mount "$fs_opts" $fs_label "$fs_params" && done_filesystems+=("$fs_id") || returncode=1
 					elif [ "$part_type" = lvm-pv ] && pvdisplay ${fs_params//:/ } >/dev/null # $part is a lvm PV. all needed lvm pv's exist. note that pvdisplay exits 5 as long as one of the args doesn't exist
 					then
 						debug 'FS' "$fs_id ->Still need to do it: Making the filesystem on a pv volume"
 						inform "Making $fs_type filesystem on $part" disks
-						process_filesystem ${part/+/} $fs_type $fs_create $fs_mountpoint no_mount $fs_opts $fs_label $fs_params && done_filesystems+=("$fs_id") || returncode=1
+						process_filesystem ${part/+/} $fs_type $fs_create $fs_mountpoint no_mount "$fs_opts" $fs_label "$fs_params" && done_filesystems+=("$fs_id") || returncode=1
 					else
 						debug 'FS' "$fs_id ->Cannot do right now..."
 						open_items=1
 					fi
 				fi
 			fi
-		done < $TMP_FILESYSTEMS
+		done < <(sed 's/;/ /g' $TMP_FILESYSTEMS)
 		[ $open_items -eq 0 ] && break
 	done
 	[ $open_items -eq 1 ] && show_warning "Filesystem/blockdevice processor problem" "Warning: Could not create all needed filesystems.  Either the underlying blockdevices didn't became available in 10 iterations, or process_filesystem failed" && returncode=1
@@ -503,13 +504,13 @@ process_filesystems ()
 		if [ "$fs_mountpoint" != no_mountpoint ]
 		then
 			inform "Mounting $part ($fs_type) on $fs_mountpoint" disks
-			process_filesystem $part $fs_type no $fs_mountpoint $fs_mount $fs_opts $fs_label $fs_params || returncode=1
+			process_filesystem $part $fs_type no $fs_mountpoint $fs_mount "$fs_opts" $fs_label "$fs_params" || returncode=1
 		elif [ "$fs_type" = swap ]
 		then
 			inform "Swaponning $part" disks
-			process_filesystem $part $fs_type no $fs_mountpoint $fs_mount $fs_opts $fs_label $fs_params || returncode=1
+			process_filesystem $part $fs_type no $fs_mountpoint $fs_mount "$fs_opts" $fs_label "$fs_params" || returncode=1
 		fi
-	done < <(sort -t \  -k 6 $TMP_FILESYSTEMS)
+	done < <(sed 's/;/ /g' $TMP_FILESYSTEMS | sort -t \  -k 6)
 
 	BLOCK_ROLLBACK_USELESS=0
 	[ $returncode -eq 0 ] && inform "Done processing filesystems/blockdevices" disks 1 && return 0
@@ -554,7 +555,7 @@ rollback_filesystems ()
 				fi
 			fi
 		fi
-	done < <(sort -t \  -k 6 -r $TMP_FILESYSTEMS)
+	done < <(sed 's/;/ /g' $TMP_FILESYSTEMS | sort -t \  -k 6 -r)
 
 
 	# phase 2: destruct blockdevices listed in $BLOCK_DATA if they would exist already, in the correct order (first lvm LV, then VG, then PV etc)
@@ -737,7 +738,6 @@ process_filesystem ()
 				  fi
 				  ;;
 			dm_crypt) [ -z "$fs_params" ] && fs_params='-c aes-xts-plain -y -s 512';
-			          fs_params=${fs_params//_/ }
                       inform "Please enter your passphrase to encrypt the device (with confirmation)"
 			          cryptsetup $fs_params $opts luksFormat -q $part >$LOG 2>&1 < /dev/tty ; ret=$? #hack to give cryptsetup the approriate stdin. keep in mind we're in a loop (see process_filesystems where something else is on stdin)
                       inform "Please enter your passphrase to unlock the device"

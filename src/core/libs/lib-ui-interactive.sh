@@ -388,9 +388,9 @@ interactive_filesystem ()
 		local old_fs_create=$fs_create
 		local old_fs_mountpoint=$fs_mountpoint
 		local old_fs_mount=$fs_mount
-		local old_fs_opts=$fs_opts
+		local old_fs_opts="$fs_opts"
 		local old_fs_label=$fs_label
-		local old_fs_params=$fs_params
+		local old_fs_params="$fs_params"
 
 		ask_option edit "Change $fs_type filesystem settings on $part ?" \
 		                "Change $fs_type filesystem settings (create:$fs_create, label:$fs_label, mountpoint:$fs_mountpoint) on $part (type:$part_type, label:$part_label) ?" required \
@@ -488,7 +488,7 @@ interactive_filesystem ()
 		then
 			# add $part to $fs_params if it's not in there because the user wants this enabled by default. TODO: we should find something out so you can't disable $part. (would be weird to have a vg listed on $part and not have $part it fs_params)
 			pv=${part/+/}
-			grep -q ":$pv:" <<< $fs_params || grep -q ":$pv\$" <<< $fs_params || fs_params="$fs_params:$pv"
+			grep -q ":$pv:" <<< "$fs_params" || grep -q ":$pv\$" <<< "$fs_params" || fs_params="$fs_params:$pv"
 			list=
 			for pv in `sed 's/:/ /' <<< $fs_params`
 			do
@@ -519,9 +519,9 @@ interactive_filesystem ()
 		if [ "$fs_create" == yes ] && [ "$fs_type" = dm_crypt ]
 		then
 			[ -z "$fs_params" ] && default='-c aes-xts-plain -y -s 512'
-			[ -n "$fs_params" ] && default="${fs_params//_/ }"
+			[ -n "$fs_params" ] && default="$fs_params"
 			ask_string "Enter the options for this $fs_type on $part" "$default" || return 1
-			fs_params="${ANSWER_STRING// /_}"
+			fs_params="${ANSWER_STRING}"
 		fi
 
 		# ask opts
@@ -530,8 +530,8 @@ interactive_filesystem ()
 			default=
 			[ -n "$fs_opts" ] && default="$fs_opts"
 			program=`get_filesystem_program $fs_type`
-			ask_string "Enter any additional opts for $program" "$default" 0
-			fs_opts=$(sed 's/ /_/g' <<< "$ANSWER_STRING") #TODO: clean up all whitespace (tabs and shit)
+			ask_string "Enter any additional opts for $program (do not enter ';'!)" "$default" 0
+			fs_opts="$ANSWER_STRING"
 		fi
 
 		[ -z "$fs_type"       ] && fs_type=no_type
